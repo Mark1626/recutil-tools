@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
 use clap::Parser;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use recsql::RecTableProvider;
 
 #[derive(Parser, Debug)]
@@ -14,22 +14,18 @@ use recsql::RecTableProvider;
     version
 )]
 struct Opts {
-    /// Input .rec file
+    /// Input .rec file. Every `%rec:` record set is registered as a SQL
+    /// table named after its type.
     input: PathBuf,
-    /// Record-set type (the name after `%rec:`); also the SQL table name
-    #[arg(short = 't', long = "type")]
-    record_type: String,
     /// SQL query to run
     #[arg(short = 'q', long)]
     query: String,
 }
 
 fn main() -> ExitCode {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp(None)
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp(None)
+        .init();
 
     let opts = Opts::parse();
     let rt = match tokio::runtime::Runtime::new() {
@@ -49,9 +45,18 @@ fn main() -> ExitCode {
 }
 
 async fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = Arc::new(RecTableProvider::open(&opts.input, &opts.record_type)?);
-    let ctx = SessionContext::new();
-    ctx.register_table(opts.record_type.as_str(), provider)?;
+    let providers = RecTableProvider::open_all(&opts.input)?;
+    if providers.is_empty() {
+        return Err(format!(
+            "no named record sets found in {}; recsql needs at least one `%rec:` block",
+            opts.input.display()
+        )
+        .into());
+    }
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_information_schema(true));
+    for (name, provider) in providers {
+        ctx.register_table(name.as_str(), Arc::new(provider))?;
+    }
     let df = ctx.sql(&opts.query).await?;
     let batches = df.collect().await?;
     println!("{}", pretty_format_batches(&batches)?);

@@ -1,9 +1,19 @@
 //! Translate a subset of DataFusion `Expr`s into recutils selection
 //! expression syntax for filter pushdown into the librec layer.
 //!
-//! Returning `None` from [`expr_to_selection_expression`] means "this
-//! predicate does not have a known selection-expression equivalent" — the
-//! caller should leave it for DataFusion to evaluate above the provider.
+//! Two flavors of conversion:
+//! - [`expr_to_selection_expression`] succeeds only when the *entire*
+//!   predicate has a selection-expression equivalent. Callers can report
+//!   this as `Exact` — librec applies it and DataFusion does not re-check.
+//! - [`pushdown_for`] additionally extracts the convertible conjuncts of
+//!   an `AND` tree when the full predicate isn't convertible. The result
+//!   is a safe relaxation (every row matching the original still matches),
+//!   so callers report it as `Inexact` and rely on DataFusion to re-check
+//!   above the provider.
+//!
+//! We deliberately do not descend into `OR` or `NOT` for partial
+//! extraction — a strict subset of an `OR` would exclude rows that should
+//! match, and a strict subset under `NOT` flips into a superset.
 //!
 //! Supported today:
 //! - `Column <op> Literal` and `Literal <op> Column` for `=`, `!=`, `<`,
@@ -15,6 +25,40 @@
 use arrow::datatypes::{DataType, Schema};
 use datafusion::common::{Column, ScalarValue};
 use datafusion::logical_expr::{BinaryExpr, Cast, Expr, Operator};
+
+/// Returns `Some((clause, is_full))` when any part of `expr` can be
+/// pushed to librec. `is_full = true` ⇒ the clause is equivalent to
+/// `expr` (caller marks `Exact`); `is_full = false` ⇒ the clause is a
+/// safe relaxation extracted from a top-level conjunction (caller marks
+/// `Inexact` so DataFusion still re-evaluates the original).
+pub(crate) fn pushdown_for(expr: &Expr, schema: &Schema) -> Option<(String, bool)> {
+    if let Some(s) = expr_to_selection_expression(expr, schema) {
+        return Some((s, true));
+    }
+    let conjuncts = extract_conjuncts(expr, schema);
+    if conjuncts.is_empty() {
+        return None;
+    }
+    let combined = conjuncts
+        .into_iter()
+        .map(|c| format!("({c})"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    Some((combined, false))
+}
+
+fn extract_conjuncts(expr: &Expr, schema: &Schema) -> Vec<String> {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr { left, op: Operator::And, right }) => {
+            let mut out = extract_conjuncts(left, schema);
+            out.extend(extract_conjuncts(right, schema));
+            out
+        }
+        other => expr_to_selection_expression(other, schema)
+            .into_iter()
+            .collect(),
+    }
+}
 
 pub(crate) fn expr_to_selection_expression(expr: &Expr, schema: &Schema) -> Option<String> {
     match expr {
