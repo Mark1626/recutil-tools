@@ -19,7 +19,7 @@ rec2parquet <INPUT> <OUTPUT> -t <TYPE> [-c <COMPRESSION>] [--max-row-group-size 
 
 ### [`recsql`](./recsql)
 
-CLI tool to query `.rec` files with SQL via [Apache DataFusion](https://datafusion.apache.org/)
+CLI tool to query `.rec` files with SQL via [Apache DataFusion](https://datafusion.apache.org/). Every `%rec:` record set is registered as a SQL table named after its type. Anonymous record sets — files with no `%rec:` descriptor, such as the output of `csv2rec` — are exposed as the table `rec` (or `rec_<index>` when there's more than one or the simple name would collide).
 
 ```bash
 recsql <INPUT> -q '<SQL>'
@@ -30,6 +30,10 @@ recsql library.rec -q '
   SELECT b."Title", b."Year", a."Country"
   FROM book b JOIN author a ON b."Author" = a."Name"
   ORDER BY b."Year"'
+
+# Query a CSV-derived recfile (no %rec: descriptor)
+csv2rec books.csv > books.rec
+recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
 ```
 
 ## Build

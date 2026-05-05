@@ -14,8 +14,9 @@ use recsql::RecTableProvider;
     version
 )]
 struct Opts {
-    /// Input .rec file. Every `%rec:` record set is registered as a SQL
-    /// table named after its type.
+    /// Input .rec file. Every record set is registered as a SQL table named
+    /// after its `%rec:` type, or as `rec` (or `rec_<index>`) for anonymous
+    /// rsets with no descriptor (e.g. files produced by csv2rec).
     input: PathBuf,
     /// SQL query to run
     #[arg(short = 'q', long)]
@@ -47,11 +48,7 @@ fn main() -> ExitCode {
 async fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
     let providers = RecTableProvider::open_all(&opts.input)?;
     if providers.is_empty() {
-        return Err(format!(
-            "no named record sets found in {}; recsql needs at least one `%rec:` block",
-            opts.input.display()
-        )
-        .into());
+        return Err(format!("no record sets found in {}", opts.input.display()).into());
     }
     let ctx = SessionContext::new_with_config(SessionConfig::new().with_information_schema(true));
     for (name, provider) in providers {

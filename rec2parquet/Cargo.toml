@@ -1,9 +1,15 @@
 [package]
 name = "rec2parquet"
-version = "0.1.0"
-edition = "2024"
-description = "Convert GNU recutils .rec files to Apache Parquet"
-license = "GPL-3.0-or-later"
+description = "CLI to convert GNU recutils .rec files to Apache Parquet"
+keywords = ["recutils", "parquet", "arrow", "cli", "convert"]
+categories = ["command-line-utilities", "database", "encoding"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 
 [[bin]]
 name = "rec2parquet"

@@ -1,10 +1,16 @@
 [package]
 name = "recutils-rs"
-version = "0.1.0"
-edition = "2024"
-description = "Rust FFI bindings to GNU recutils (librec)"
-license = "GPL-3.0-or-later"
+description = "Rust FFI bindings to GNU recutils (librec) with an optional Arrow conversion layer"
+keywords = ["recutils", "ffi", "bindings", "arrow", "database"]
+categories = ["api-bindings", "external-ffi-bindings", "database"]
 links = "rec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 
 [features]
 default = []

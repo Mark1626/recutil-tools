@@ -1,9 +1,15 @@
 [package]
 name = "recsql"
-version = "0.1.0"
-edition = "2024"
 description = "Query GNU recutils .rec files with SQL via Apache DataFusion"
-license = "GPL-3.0-or-later"
+keywords = ["recutils", "sql", "datafusion", "cli", "query"]
+categories = ["command-line-utilities", "database"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
 
 [lib]
 name = "recsql"

@@ -10,30 +10,37 @@ use arrow::array::{ArrayRef, BooleanBuilder, Float64Builder, Int64Builder, Strin
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
+use crate::rset::Rset;
 use crate::{Db, SelectionExpression};
 
 pub fn rec_to_record_batch(
     db: &mut Db,
     record_type: &str,
 ) -> Result<(Arc<Schema>, RecordBatch), Box<dyn std::error::Error>> {
-    let declared_types = {
-        let rset = db
-            .rset_by_type(record_type)
-            .ok_or_else(|| format!("no record set of type {record_type:?}"))?;
-        let mut types: HashMap<String, String> = HashMap::new();
-        if let Some(desc) = rset.descriptor() {
-            for f in desc.fields() {
-                if f.name() == "%type" {
-                    if let Some((field, ty)) = split_type_decl(&f.value()) {
-                        types.insert(field, ty);
-                    }
+    let rset = db
+        .rset_by_type(record_type)
+        .ok_or_else(|| format!("no record set of type {record_type:?}"))?;
+    rec_to_record_batch_from_rset(&rset)
+}
+
+/// Build the `(schema, batch)` for an arbitrary [`Rset`], including
+/// anonymous record sets that have no `%rec:` descriptor (so they can't be
+/// looked up by [`Db::rset_by_type`]).
+pub fn rec_to_record_batch_from_rset(
+    rset: &Rset<'_>,
+) -> Result<(Arc<Schema>, RecordBatch), Box<dyn std::error::Error>> {
+    let mut declared_types: HashMap<String, String> = HashMap::new();
+    if let Some(desc) = rset.descriptor() {
+        for f in desc.fields() {
+            if f.name() == "%type" {
+                if let Some((field, ty)) = split_type_decl(&f.value()) {
+                    declared_types.insert(field, ty);
                 }
             }
         }
-        types
-    };
+    }
 
-    let (column_order, rows) = collect_rows(db, record_type)?;
+    let (column_order, rows) = collect_rows_from_rset(rset)?;
     let schema = build_schema(&column_order, &declared_types);
     let columns = build_columns(&schema, &rows);
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
@@ -53,7 +60,15 @@ pub fn rec_to_filtered_batch(
     let rset = db
         .rset_by_type(record_type)
         .ok_or_else(|| format!("no record set of type {record_type:?}"))?;
+    rec_to_filtered_batch_from_rset(&rset, schema, selection_expression)
+}
 
+/// Same as [`rec_to_filtered_batch`] but for an arbitrary [`Rset`].
+pub fn rec_to_filtered_batch_from_rset(
+    rset: &Rset<'_>,
+    schema: &Arc<Schema>,
+    selection_expression: &SelectionExpression,
+) -> Result<RecordBatch, Box<dyn std::error::Error>> {
     let mut rows: Vec<HashMap<String, String>> = Vec::new();
     for (i, record) in rset.records().enumerate() {
         if !selection_expression.matches(&record) {
@@ -94,7 +109,12 @@ pub fn collect_rows(
     let rset = db
         .rset_by_type(record_type)
         .ok_or_else(|| format!("no record set of type {record_type:?}"))?;
+    collect_rows_from_rset(&rset)
+}
 
+pub fn collect_rows_from_rset(
+    rset: &Rset<'_>,
+) -> Result<(Vec<String>, Vec<HashMap<String, String>>), Box<dyn std::error::Error>> {
     let mut column_order: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut rows: Vec<HashMap<String, String>> = Vec::new();
