@@ -54,6 +54,19 @@ cargo build --workspace --all-targets
 `bindgen` requires `libclang` (Xcode CLT on macOS, `libclang-dev` on Linux).
 On Linux: `apt install recutils libgnurec-dev`.
 
+## Claude Code skill
+
+A [Claude Code](https://claude.com/claude-code) skill teaching `recsql` usage lives at [`.claude/skills/recsql/SKILL.md`](./.claude/skills/recsql/SKILL.md). It covers the table-naming rules (named `%rec:` types vs. anonymous rsets), DataFusion identifier-quoting, declared-vs-inferred column types, and filter pushdown.
+
+- **Inside this repo**: nothing to do — Claude Code auto-loads project-level skills from `.claude/skills/`.
+- **Anywhere else**: copy it once into your user skills directory.
+
+```bash
+mkdir -p ~/.claude/skills/recsql
+curl -fsSL https://raw.githubusercontent.com/Mark1626/recutil-tools/main/.claude/skills/recsql/SKILL.md \
+  -o ~/.claude/skills/recsql/SKILL.md
+```
+
 ## License
 
 `GPL-3.0-or-later`
