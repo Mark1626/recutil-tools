@@ -15,6 +15,9 @@ readme = "README.md"
 name = "rec2parquet"
 path = "src/main.rs"
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 recutils-rs = { path = "../recutils-rs", version = "0.1", features = ["arrow"] }
 arrow = "58"

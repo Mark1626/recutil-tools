@@ -6,6 +6,7 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod ffi {
     #![allow(dead_code)]
@@ -18,6 +19,7 @@ mod rset;
 mod selection_expression;
 
 #[cfg(feature = "arrow")]
+#[cfg_attr(docsrs, doc(cfg(feature = "arrow")))]
 pub mod arrow;
 
 pub use db::Db;

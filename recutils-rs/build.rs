@@ -5,9 +5,21 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-env-changed=RECUTILS_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=RECUTILS_LIB_DIR");
     println!("cargo:rerun-if-env-changed=RECUTILS_PREFIX");
+
+    // docs.rs runs in a Debian sandbox without librec or its headers. Skip
+    // bindgen + linking and ship the checked-in pre-generated bindings so
+    // rustdoc has the item signatures it needs. The bindings are
+    // architecture-shaped but rustdoc only renders names + types, not ABI.
+    if env::var_os("DOCS_RS").is_some() {
+        let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+        std::fs::copy("src/bindings.docsrs.rs", out_path.join("bindings.rs"))
+            .expect("failed to stage pre-generated bindings for docs.rs build");
+        return;
+    }
 
     let (include_dir, lib_dir) = locate_recutils();
 

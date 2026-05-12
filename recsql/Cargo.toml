@@ -19,6 +19,9 @@ path = "src/lib.rs"
 name = "recsql"
 path = "src/main.rs"
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 recutils-rs = { path = "../recutils-rs", version = "0.1", features = ["arrow"] }
 arrow = "58"

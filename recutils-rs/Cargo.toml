@@ -27,3 +27,7 @@ bindgen = "0.71"
 [lib]
 name = "recutils_rs"
 crate-type = ["rlib"]
+
+[package.metadata.docs.rs]
+features = ["arrow"]
+rustdoc-args = ["--cfg", "docsrs"]
