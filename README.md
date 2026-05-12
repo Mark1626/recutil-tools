@@ -7,7 +7,7 @@ A set of tools around [GNU recutils](https://www.gnu.org/software/recutils/).
 ### [`recutils-rs`](./recutils-rs)
 
 Rust FFI bindings to `librec` with a safe wrapper to contain unsafe FFI calls.
-Also has an optional `arrow` feature to read recfiles into Arrow `RecordBatch`es
+Also has an optional `arrow` feature to read recfiles into Arrow `RecordBatch`es and to serialize `RecordBatch`es back out as `.rec` text (with `%rec:` / `%type:` / `%mandatory:` declarations).
 
 ### [`rec2parquet`](./rec2parquet)
 
@@ -34,6 +34,12 @@ recsql library.rec -q '
 # Query a CSV-derived recfile (no %rec: descriptor)
 csv2rec books.csv > books.rec
 recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
+
+# Write query results to a new .rec file with %type: / %mandatory: from the schema
+recsql library.rec -q "
+  COPY (SELECT \"Title\", \"Year\", \"Pages\" FROM book WHERE \"Year\" > 1990)
+  TO '/tmp/recent.rec' STORED AS REC
+  OPTIONS ('record_type' 'Book')"
 ```
 
 ## Build

@@ -19,7 +19,12 @@
 //! the relaxation, DataFusion re-checks the original); everything else is
 //! `Unsupported`.
 
+pub mod format;
 mod pushdown;
+pub mod sink;
+
+pub use format::{RecFileFormat, RecFileFormatFactory};
+pub use sink::RecSink;
 
 use std::any::Any;
 use std::fs;

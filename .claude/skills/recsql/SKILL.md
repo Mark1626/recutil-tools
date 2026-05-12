@@ -1,6 +1,6 @@
 ---
 name: recsql
-description: Query GNU recutils .rec files with SQL via the recsql CLI. Use when the user wants to filter, project, join, or aggregate over a .rec file, or when reaching for awk/grep/recsel-pipelines on rec data would be clumsy. Covers the table-naming rules (named %rec: types vs. anonymous rsets like csv2rec output), DataFusion identifier-quoting, declared-vs-inferred column types, and filter pushdown.
+description: Query GNU recutils .rec files with SQL via the recsql CLI. Use when the user wants to filter, project, join, or aggregate over a .rec file, when reaching for awk/grep/recsel-pipelines on rec data would be clumsy, or when the user wants to COPY query results out to a fresh .rec file with %type:/%mandatory: declarations preserved. Covers the table-naming rules (named %rec: types vs. anonymous rsets like csv2rec output), DataFusion identifier-quoting, declared-vs-inferred column types, filter pushdown, and the COPY write path.
 ---
 
 # recsql
@@ -79,9 +79,44 @@ Predicates that translate cleanly into a recutils selection-expression are pushe
 
 Run with `RUST_LOG=debug recsql ...` to see what got pushed.
 
-## DML / writes
+## Writing: `COPY` to a fresh `.rec` file
 
-**Not supported.** `INSERT`, `UPDATE`, `DELETE` all return `not_impl_err` from DataFusion. There's an unimplemented plan in the repo (`INSERT_PLAN.md`) for `INSERT` support; until it lands, recsql is read-only.
+`COPY (SELECT ...) TO '<path>' STORED AS REC OPTIONS ('record_type' '<Name>')` writes the query results as a fresh `.rec` file. The `%rec:` / `%type:` / `%mandatory:` descriptor is built from the Arrow schema of the SELECT.
+
+```bash
+recsql library.rec -q "
+  COPY (SELECT \"Title\", \"Year\", \"Pages\" FROM book WHERE \"Year\" > 1990)
+  TO '/tmp/recent.rec' STORED AS REC
+  OPTIONS ('record_type' 'Book')"
+```
+
+Produces:
+
+```
+%rec: Book
+%type: Year int
+%type: Pages int
+
+Title: The Practice of Programming
+Year: 1999
+Pages: 267
+```
+
+Rules and footguns:
+
+- **`record_type` is required.** Missing it → plan-time error. There's no implicit default.
+- **No overwrite.** If the target path already exists, the write is refused before any I/O. The user must delete the file first. (DataFusion 53 doesn't expose `COPY OVERWRITE` syntax; this isn't a recsql gap.)
+- **Local filesystem only.** `s3://`, `gs://`, etc. return `not_impl_err`.
+- **Type info round-trips.** Int64 → `%type: <field> int`, Float64 → `real`, Boolean → `bool`, Utf8 → no `%type:` (rec's default is string). Non-nullable Arrow fields produce `%mandatory:` lines.
+- **Nulls become absent fields.** A null value in the input batch omits that field from the emitted record — matches the read side's "missing field == null" convention.
+
+## DML against existing rsets
+
+**Not supported.** `INSERT`, `UPDATE`, `DELETE` against a registered rec table all return `not_impl_err`. There's an unimplemented plan in the repo (`INSERT_PLAN.md`) for `INSERT INTO existing_rset` semantics; until it lands, the only write surface is `COPY ... TO` to a new file.
+
+## Reading via `CREATE EXTERNAL TABLE` / path-as-table
+
+Not supported either. `CREATE EXTERNAL TABLE foo STORED AS REC LOCATION '...'` and `SELECT * FROM '/some/file.rec'` both return `not_impl_err` — the rec `FileFormat` is write-only. Reads are intentionally routed through the per-rset `RecTableProvider` that the CLI registers at startup, because a single `.rec` file can contain multiple `%rec:` blocks with distinct schemas and the `FileFormat` model can only return one schema per file. To query a file, point the CLI at it: `recsql <file.rec> -q '...'`.
 
 ## Limitations to surface
 
@@ -92,5 +127,5 @@ Run with `RUST_LOG=debug recsql ...` to see what got pushed.
 ## When NOT to suggest recsql
 
 - Single-field substring search on a known type → `recsel -e '...'` is shorter.
-- Mutating the file → use `recins` / `recset` / `recdel` directly; recsql can't write.
+- Mutating an existing rec file in place → use `recins` / `recset` / `recdel` directly. recsql's `COPY` writes a *new* file; it can't append to or edit an existing one yet.
 - Streaming/very-large files → recsql parses the whole file into memory.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow::util::pretty::pretty_format_batches;
 use clap::Parser;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use recsql::RecTableProvider;
+use recsql::{RecFileFormatFactory, RecTableProvider};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -51,6 +51,9 @@ async fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("no record sets found in {}", opts.input.display()).into());
     }
     let ctx = SessionContext::new_with_config(SessionConfig::new().with_information_schema(true));
+    ctx.state_ref()
+        .write()
+        .register_file_format(Arc::new(RecFileFormatFactory::new()), false)?;
     for (name, provider) in providers {
         ctx.register_table(name.as_str(), Arc::new(provider))?;
     }

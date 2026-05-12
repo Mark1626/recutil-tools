@@ -23,6 +23,28 @@ recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
 
 Filter pushdown to recutils' selection-expression engine is best-effort: predicates that translate fully are reported as `Exact` (librec evaluates them and DataFusion does not re-check); a partial conjunction is `Inexact` (we push a relaxation, DataFusion re-checks); anything else stays in DataFusion.
 
+## Writing results to a new `.rec` file
+
+`COPY (SELECT ...) TO '<path>' STORED AS REC OPTIONS ('record_type' '<Name>')` writes the query output as a fresh `.rec` file. The descriptor block (`%rec:`, `%type:`, `%mandatory:`) is derived from the SELECT's Arrow schema — Int64 → `int`, Float64 → `real`, Boolean → `bool`, Utf8 → no `%type:` (rec's default is string), and any non-nullable column produces a `%mandatory:` line. Nulls are omitted from the emitted record (rec's "missing field == null" convention).
+
+```bash
+recsql library.rec -q "
+  COPY (SELECT \"Title\", \"Year\", \"Pages\" FROM book WHERE \"Year\" > 1990)
+  TO '/tmp/recent.rec' STORED AS REC
+  OPTIONS ('record_type' 'Book')"
+
+cat /tmp/recent.rec
+# %rec: Book
+# %type: Year int
+# %type: Pages int
+#
+# Title: The Practice of Programming
+# Year: 1999
+# Pages: 267
+```
+
+`record_type` is required. The write refuses to overwrite an existing path (delete it first) and only supports local-filesystem targets. In-place `INSERT`/`UPDATE`/`DELETE` against an existing rset are still unsupported (see `INSERT_PLAN.md`); `COPY ... TO` is the only write surface today.
+
 ## Install
 
 ```bash
