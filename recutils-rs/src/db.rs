@@ -2,7 +2,7 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
 use crate::ffi::*;
-use crate::rset::Rset;
+use crate::rset::{OwnedRset, Rset};
 use crate::{Error, cstring, ensure_init};
 
 unsafe extern "C" {
@@ -14,6 +14,15 @@ pub struct Db {
 }
 
 impl Db {
+    /// Allocate an empty database. Use [`Db::append_rset`] to add record sets
+    /// before serializing via [`Db::to_rec_string`].
+    pub fn new() -> Self {
+        ensure_init();
+        let ptr = unsafe { rec_db_new() };
+        assert!(!ptr.is_null(), "rec_db_new returned NULL");
+        Db { ptr }
+    }
+
     pub fn parse_str(text: &str) -> Result<Self, Error> {
         ensure_init();
         let c_text = cstring(text, "rec source")?;
@@ -50,6 +59,20 @@ impl Db {
         (!p.is_null()).then(|| Rset::from_raw(p))
     }
 
+    /// Append an [`OwnedRset`] to the end of the database. Ownership of the
+    /// rset transfers to librec; the rset will be freed when this `Db` is
+    /// dropped.
+    pub fn append_rset(&mut self, rset: OwnedRset) -> Result<(), Error> {
+        let raw = rset.into_raw();
+        let position = unsafe { rec_db_size(self.ptr) };
+        let ok = unsafe { rec_db_insert_rset(self.ptr, raw, position) };
+        if !ok {
+            unsafe { rec_rset_destroy(raw) };
+            return Err(Error::new("rec_db_insert_rset failed"));
+        }
+        Ok(())
+    }
+
     pub fn to_rec_string(&self) -> Result<String, Error> {
         unsafe {
             let mut buf: *mut c_char = ptr::null_mut();
@@ -70,6 +93,12 @@ impl Db {
             free(buf as *mut c_void);
             Ok(s)
         }
+    }
+}
+
+impl Default for Db {
+    fn default() -> Self {
+        Db::new()
     }
 }
 

@@ -6,12 +6,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BooleanBuilder, Float64Builder, Int64Builder, StringBuilder};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
+    Int64Builder, StringArray, StringBuilder,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
 use crate::rset::Rset;
-use crate::{Db, SelectionExpression};
+use crate::{Db, OwnedRset, Record, SelectionExpression};
 
 pub fn rec_to_record_batch(
     db: &mut Db,
@@ -254,5 +257,278 @@ pub fn parse_rec_bool(s: &str) -> Option<bool> {
         "yes" | "true" | "1" => Some(true),
         "no" | "false" | "0" => Some(false),
         _ => None,
+    }
+}
+
+/// Serialize `batches` as a `.rec` file body containing a single record set
+/// of type `record_type`. The descriptor block carries `%rec:`, one `%type:`
+/// line per non-Utf8 column, and one `%mandatory:` line per non-nullable
+/// Arrow field. Null values are omitted from the produced records (rec
+/// convention: absent field == null).
+///
+/// Each batch's column count and layout must match `schema`. Unsupported
+/// Arrow types (anything beyond Int64 / Float64 / Boolean / Utf8) return an
+/// error rather than producing a lossy serialization.
+pub fn record_batches_to_rec_string(
+    record_type: &str,
+    schema: &Schema,
+    batches: &[RecordBatch],
+) -> Result<String, Box<dyn std::error::Error>> {
+    if record_type.is_empty() {
+        return Err("record_type must be a non-empty rec type name".into());
+    }
+
+    let mut db = Db::new();
+    let mut rset = OwnedRset::new();
+    rset.set_descriptor(build_descriptor(record_type, schema)?);
+
+    for batch in batches {
+        if batch.num_columns() != schema.fields().len() {
+            return Err(format!(
+                "batch has {} columns but schema has {}",
+                batch.num_columns(),
+                schema.fields().len()
+            )
+            .into());
+        }
+        for row in 0..batch.num_rows() {
+            let mut record = Record::new();
+            for (col_idx, field) in schema.fields().iter().enumerate() {
+                let array = batch.column(col_idx).as_ref();
+                if array.is_null(row) {
+                    continue;
+                }
+                let value = format_arrow_value(field, array, row)?;
+                record.append_field(field.name(), &value)?;
+            }
+            rset.append_record(record)?;
+        }
+    }
+
+    db.append_rset(rset)?;
+    Ok(db.to_rec_string()?)
+}
+
+fn build_descriptor(
+    record_type: &str,
+    schema: &Schema,
+) -> Result<Record, Box<dyn std::error::Error>> {
+    let mut desc = Record::new();
+    desc.append_field("%rec", record_type)?;
+    for field in schema.fields() {
+        if let Some(rec_ty) = map_arrow_to_rec_type(field.data_type())? {
+            desc.append_field("%type", &format!("{} {}", field.name(), rec_ty))?;
+        }
+    }
+    for field in schema.fields() {
+        if !field.is_nullable() {
+            desc.append_field("%mandatory", field.name())?;
+        }
+    }
+    Ok(desc)
+}
+
+/// Inverse of [`map_rec_type`]. Returns `Ok(None)` for `Utf8`, since rec's
+/// untyped default is string and emitting `%type: <name> string` would be
+/// noise. Returns `Err` for Arrow types we don't know how to round-trip.
+pub fn map_arrow_to_rec_type(
+    dt: &DataType,
+) -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
+    Ok(match dt {
+        DataType::Int64 => Some("int"),
+        DataType::Float64 => Some("real"),
+        DataType::Boolean => Some("bool"),
+        DataType::Utf8 => None,
+        other => {
+            return Err(format!("unsupported arrow type {other:?} for rec output").into());
+        }
+    })
+}
+
+pub fn format_arrow_value(
+    field: &Field,
+    array: &dyn Array,
+    row: usize,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match field.data_type() {
+        DataType::Int64 => {
+            let a = array
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or("expected Int64Array")?;
+            Ok(a.value(row).to_string())
+        }
+        DataType::Float64 => {
+            let a = array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or("expected Float64Array")?;
+            Ok(format_rec_float(a.value(row)))
+        }
+        DataType::Boolean => {
+            let a = array
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or("expected BooleanArray")?;
+            Ok(if a.value(row) { "yes" } else { "no" }.to_string())
+        }
+        DataType::Utf8 => {
+            let a = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or("expected StringArray")?;
+            Ok(a.value(row).to_string())
+        }
+        other => Err(format!("unsupported arrow type {other:?} for rec output").into()),
+    }
+}
+
+/// Format an `f64` so integer-valued finite floats serialize as `"1.0"`
+/// rather than `"1"`. Keeps round-trips stable when the file is read back
+/// without `%type: real` (e.g. by a human-trimmed descriptor).
+fn format_rec_float(f: f64) -> String {
+    if f.is_finite() && f.fract() == 0.0 {
+        format!("{f:.1}")
+    } else {
+        f.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{BooleanArray, Float64Array, Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn sample_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("Title", DataType::Utf8, false),
+            Field::new("Year", DataType::Int64, true),
+            Field::new("Price", DataType::Float64, true),
+            Field::new("InPrint", DataType::Boolean, true),
+        ]))
+    }
+
+    fn sample_batch(schema: &Arc<Schema>) -> RecordBatch {
+        let titles: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("Refactoring"),
+            Some("TDD"),
+        ]));
+        let years: ArrayRef = Arc::new(Int64Array::from(vec![Some(1999), None]));
+        let prices: ArrayRef =
+            Arc::new(Float64Array::from(vec![Some(42.0), Some(19.95)]));
+        let in_print: ArrayRef =
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false)]));
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![titles, years, prices, in_print],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn descriptor_carries_types_and_mandatory() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        let text =
+            record_batches_to_rec_string("Book", &schema, std::slice::from_ref(&batch))
+                .unwrap();
+        assert!(text.contains("%rec: Book"));
+        assert!(text.contains("%type: Year int"));
+        assert!(text.contains("%type: Price real"));
+        assert!(text.contains("%type: InPrint bool"));
+        // Utf8 columns get no %type: line.
+        assert!(!text.contains("%type: Title"));
+        // Only the non-nullable Arrow field becomes %mandatory.
+        assert!(text.contains("%mandatory: Title"));
+        assert!(!text.contains("%mandatory: Year"));
+    }
+
+    #[test]
+    fn integer_valued_float_keeps_decimal() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        let text =
+            record_batches_to_rec_string("Book", &schema, std::slice::from_ref(&batch))
+                .unwrap();
+        assert!(text.contains("Price: 42.0"));
+        assert!(text.contains("Price: 19.95"));
+    }
+
+    #[test]
+    fn bool_writes_yes_no() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        let text =
+            record_batches_to_rec_string("Book", &schema, std::slice::from_ref(&batch))
+                .unwrap();
+        assert!(text.contains("InPrint: yes"));
+        assert!(text.contains("InPrint: no"));
+    }
+
+    #[test]
+    fn null_field_is_omitted() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        let text =
+            record_batches_to_rec_string("Book", &schema, std::slice::from_ref(&batch))
+                .unwrap();
+        // The second record has Year=null; it should not emit a Year field.
+        // Anchor on the unique Title "TDD" to find the second record block.
+        let tdd_idx = text.find("Title: TDD").expect("TDD record present");
+        let tdd_block = &text[tdd_idx..];
+        // Stop at the next blank-line-prefixed record or EOF.
+        let block_end = tdd_block.find("\n\n").unwrap_or(tdd_block.len());
+        let block = &tdd_block[..block_end];
+        assert!(!block.contains("Year:"), "Year should be omitted: {block:?}");
+    }
+
+    #[test]
+    fn round_trip_through_librec_parser() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        let text =
+            record_batches_to_rec_string("Book", &schema, std::slice::from_ref(&batch))
+                .unwrap();
+
+        let mut db = Db::parse_str(&text).unwrap();
+        let (schema2, batch2) = rec_to_record_batch(&mut db, "Book").unwrap();
+
+        // Same column set in the same order.
+        let names: Vec<&str> =
+            schema2.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["Title", "Year", "Price", "InPrint"]);
+        // Types survive the round-trip.
+        assert_eq!(schema2.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(schema2.field(1).data_type(), &DataType::Int64);
+        assert_eq!(schema2.field(2).data_type(), &DataType::Float64);
+        assert_eq!(schema2.field(3).data_type(), &DataType::Boolean);
+        // Row count is preserved.
+        assert_eq!(batch2.num_rows(), batch.num_rows());
+    }
+
+    #[test]
+    fn empty_record_type_rejected() {
+        let schema = sample_schema();
+        let batch = sample_batch(&schema);
+        assert!(
+            record_batches_to_rec_string("", &schema, std::slice::from_ref(&batch))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unsupported_arrow_type_errors() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "Stamp",
+            DataType::Int32,
+            true,
+        )]));
+        let arr: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![Some(1)]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![arr]).unwrap();
+        assert!(
+            record_batches_to_rec_string("T", &schema, std::slice::from_ref(&batch))
+                .is_err()
+        );
     }
 }

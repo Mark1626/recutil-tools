@@ -2,10 +2,10 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 
-use crate::Error;
 use crate::db::Db;
 use crate::ffi::*;
 use crate::record::{Record, RecordRef};
+use crate::{Error, ensure_init};
 
 pub struct Rset<'a> {
     ptr: rec_rset_t,
@@ -123,5 +123,64 @@ impl<'a> Iterator for Records<'a> {
 impl<'a> Drop for Records<'a> {
     fn drop(&mut self) {
         unsafe { rec_mset_iterator_free(&mut self.iter) }
+    }
+}
+
+/// A freshly-built record set not yet inserted into a [`Db`]. Owns its
+/// `rec_rset_t` until handed to [`Db::append_rset`], at which point ownership
+/// is transferred to the containing database.
+pub struct OwnedRset {
+    ptr: rec_rset_t,
+}
+
+impl OwnedRset {
+    pub fn new() -> Self {
+        ensure_init();
+        let ptr = unsafe { rec_rset_new() };
+        assert!(!ptr.is_null(), "rec_rset_new returned NULL");
+        OwnedRset { ptr }
+    }
+
+    /// Install `record` as this rset's descriptor (the `%rec:` / `%type:` /
+    /// `%mandatory:` block). Ownership of the record transfers to the rset.
+    /// Replaces and destroys any prior descriptor.
+    pub fn set_descriptor(&mut self, record: Record) {
+        let raw = record.into_raw();
+        unsafe { rec_rset_set_descriptor(self.ptr, raw) };
+    }
+
+    pub fn append_record(&mut self, record: Record) -> Result<(), Error> {
+        let raw = record.into_raw();
+        let elem = unsafe {
+            rec_mset_append(
+                rec_rset_mset(self.ptr),
+                MSET_RECORD as rec_mset_type_t,
+                raw as *mut c_void,
+                MSET_RECORD as rec_mset_type_t,
+            )
+        };
+        if elem.is_null() {
+            unsafe { rec_record_destroy(raw) };
+            return Err(Error::new("rec_mset_append (record) failed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn into_raw(self) -> rec_rset_t {
+        let ptr = self.ptr;
+        std::mem::forget(self);
+        ptr
+    }
+}
+
+impl Default for OwnedRset {
+    fn default() -> Self {
+        OwnedRset::new()
+    }
+}
+
+impl Drop for OwnedRset {
+    fn drop(&mut self) {
+        unsafe { rec_rset_destroy(self.ptr) }
     }
 }

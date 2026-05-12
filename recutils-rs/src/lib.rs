@@ -22,7 +22,7 @@ pub mod arrow;
 
 pub use db::Db;
 pub use record::{FieldRef, Fields, Record, RecordRef};
-pub use rset::{Records, Rset};
+pub use rset::{OwnedRset, Records, Rset};
 pub use selection_expression::SelectionExpression;
 
 use std::ffi::CString;
@@ -112,6 +112,35 @@ Author: Eric Evans
         };
         assert_eq!(removed, 1);
         assert_eq!(db.rset_by_type("Book").unwrap().num_records(), 1);
+    }
+
+    #[test]
+    fn build_db_from_scratch() {
+        let mut db = Db::new();
+        let mut rset = OwnedRset::new();
+
+        let mut desc = Record::new();
+        desc.append_field("%rec", "Book").unwrap();
+        desc.append_field("%type", "Year int").unwrap();
+        desc.append_field("%mandatory", "Title").unwrap();
+        rset.set_descriptor(desc);
+
+        let mut r = Record::new();
+        r.append_field("Title", "TDD").unwrap();
+        r.append_field("Year", "2002").unwrap();
+        rset.append_record(r).unwrap();
+
+        db.append_rset(rset).unwrap();
+        let text = db.to_rec_string().unwrap();
+        assert!(text.contains("%rec: Book"));
+        assert!(text.contains("%type: Year int"));
+        assert!(text.contains("%mandatory: Title"));
+        assert!(text.contains("Title: TDD"));
+
+        // Round-trip: librec parses what librec wrote.
+        let mut db2 = Db::parse_str(&text).unwrap();
+        let rset2 = db2.rset_by_type("Book").unwrap();
+        assert_eq!(rset2.num_records(), 1);
     }
 
     #[test]
