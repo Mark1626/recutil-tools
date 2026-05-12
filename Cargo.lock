@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "rec2parquet"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "clap",
@@ -2528,7 +2528,7 @@ dependencies = [
 
 [[package]]
 name = "recsql"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "recutils-rs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrow",
  "bindgen",
