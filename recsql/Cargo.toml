@@ -22,6 +22,10 @@ path = "src/main.rs"
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+default = []
+repl = ["dep:rustyline", "dep:dirs"]
+
 [dependencies]
 recutils-rs = { path = "../recutils-rs", version = "0.1", features = ["arrow"] }
 arrow = "58"
@@ -32,3 +36,5 @@ futures = "0.3"
 clap = { version = "4", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
+rustyline = { version = "14", optional = true }
+dirs = { version = "5", optional = true }

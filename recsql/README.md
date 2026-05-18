@@ -45,10 +45,34 @@ cat /tmp/recent.rec
 
 `record_type` is required. The write refuses to overwrite an existing path (delete it first) and only supports local-filesystem targets. In-place `INSERT`/`UPDATE`/`DELETE` against an existing rset are still unsupported (see `INSERT_PLAN.md`); `COPY ... TO` is the only write surface today.
 
+## Interactive mode
+
+Omit `-q` to drop into a SQL REPL. Statements are `;`-terminated and may span multiple lines; Ctrl-C clears the current input, Ctrl-D exits. History persists across sessions under the platform's data dir (e.g. `~/Library/Application Support/recsql/history` on macOS, `~/.local/share/recsql/history` on Linux).
+
+```bash
+recsql library.rec
+recsql> .tables
+recsql> SELECT "Title", "Year" FROM book
+   ...> ORDER BY "Year" LIMIT 3;
+```
+
+Meta-commands (sqlite-style):
+
+| command          | effect                                  |
+|------------------|-----------------------------------------|
+| `.help`          | show help                               |
+| `.quit`, `.exit` | leave the REPL (or Ctrl-D)              |
+| `.tables`        | list registered tables                  |
+| `.schema [TBL]`  | show columns for `TBL`, or all          |
+| `.read <PATH>`   | run `;`-terminated statements from file |
+
+The REPL is gated behind the `repl` cargo feature so the headless install stays lean. Without the feature, invoking `recsql` without `-q` errors out.
+
 ## Install
 
 ```bash
-cargo install recsql
+cargo install recsql                  # headless only
+cargo install recsql --features repl  # with the interactive REPL
 ```
 
 Requires GNU `recutils` (provides `librec`) installed on the build host. On macOS: `brew install recutils`. On Debian/Ubuntu: `apt install recutils libgnurec-dev`.
