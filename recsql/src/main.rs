@@ -1,11 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
 use clap::Parser;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use recsql::{RecFileFormatFactory, RecTableProvider};
+use recsql::{MultiRecTableProvider, RecFileFormatFactory, RecTableProvider};
 
 #[cfg(feature = "repl")]
 mod repl;
@@ -26,10 +27,17 @@ pub enum OutputFormat {
     version
 )]
 struct Opts {
-    /// Input .rec file. Every record set is registered as a SQL table named
-    /// after its `%rec:` type, or as `rec` (or `rec_<index>`) for anonymous
-    /// rsets with no descriptor (e.g. files produced by csv2rec).
-    input: PathBuf,
+    /// Input .rec file(s). Every record set is registered as a SQL table
+    /// named after its `%rec:` type, or as `rec` (or `rec_<index>`) for
+    /// anonymous rsets with no descriptor (e.g. files produced by csv2rec).
+    ///
+    /// Pass several files to query across them. Give a file an explicit
+    /// table name with `alias=path` (e.g. `sales=q1.rec`). When two inputs
+    /// resolve to the *same* table name — same `%rec:` type, or the same
+    /// alias — their record sets are unioned into one table, each file
+    /// becoming a separate scan partition.
+    #[arg(required = true, num_args = 1..)]
+    inputs: Vec<String>,
     /// SQL query to run. Omit to drop into an interactive REPL (requires the
     /// `repl` feature; rebuild with `--features repl`).
     #[arg(short = 'q', long)]
@@ -65,24 +73,87 @@ fn main() -> ExitCode {
 }
 
 async fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = build_context(&opts.input)?;
+    let specs: Vec<InputSpec> = opts.inputs.iter().map(|s| InputSpec::parse(s)).collect();
+    let ctx = build_context(&specs)?;
     match opts.query {
         Some(query) => run_query(&ctx, &query, opts.format, &opts.record_type).await,
         None => run_interactive(ctx, opts.format, opts.record_type).await,
     }
 }
 
-fn build_context(input: &Path) -> Result<SessionContext, Box<dyn std::error::Error>> {
-    let providers = RecTableProvider::open_all(input)?;
-    if providers.is_empty() {
-        return Err(format!("no record sets found in {}", input.display()).into());
+/// One CLI input: an optional table alias plus a path. `alias=path` sets the
+/// alias; a bare path leaves it unnamed (tables take their `%rec:` names).
+struct InputSpec {
+    alias: Option<String>,
+    path: PathBuf,
+}
+
+impl InputSpec {
+    fn parse(raw: &str) -> Self {
+        // Treat `alias=path` as an alias only when the left side looks like a
+        // bare table name (no path separators) — otherwise it's a filename
+        // that merely contains '='.
+        if let Some((alias, path)) = raw.split_once('=') {
+            let looks_like_alias = !alias.is_empty()
+                && !alias.contains('/')
+                && !alias.contains(std::path::MAIN_SEPARATOR);
+            if looks_like_alias {
+                return InputSpec {
+                    alias: Some(alias.to_string()),
+                    path: PathBuf::from(path),
+                };
+            }
+        }
+        InputSpec {
+            alias: None,
+            path: PathBuf::from(raw),
+        }
     }
+}
+
+fn build_context(specs: &[InputSpec]) -> Result<SessionContext, Box<dyn std::error::Error>> {
+    // Group providers by resolved table name, preserving first-seen order so
+    // registration and partition order are deterministic. Same name from
+    // multiple files → one partitioned table.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<RecTableProvider>> = HashMap::new();
+    for spec in specs {
+        let rsets = RecTableProvider::open_all(&spec.path)?;
+        let multi_rset = rsets.len() > 1;
+        for (name, provider) in rsets {
+            let table = match &spec.alias {
+                // A file with several rsets can't collapse to one alias, so the
+                // alias namespaces each rset instead of replacing it.
+                Some(a) if multi_rset => format!("{a}_{name}"),
+                Some(a) => a.clone(),
+                None => name,
+            };
+            if !groups.contains_key(&table) {
+                order.push(table.clone());
+            }
+            groups.entry(table).or_default().push(provider);
+        }
+    }
+    if order.is_empty() {
+        return Err("no record sets found in the given input(s)".into());
+    }
+
     let ctx = SessionContext::new_with_config(SessionConfig::new().with_information_schema(true));
     ctx.state_ref()
         .write()
         .register_file_format(Arc::new(RecFileFormatFactory::new()), false)?;
-    for (name, provider) in providers {
-        ctx.register_table(name.as_str(), Arc::new(provider))?;
+    for name in order {
+        let mut providers = groups.remove(&name).unwrap();
+        if providers.len() == 1 {
+            ctx.register_table(name.as_str(), Arc::new(providers.pop().unwrap()))?;
+        } else {
+            log::info!(
+                "table {name:?} unions {} files as {} partitions",
+                providers.len(),
+                providers.len()
+            );
+            ctx.register_table(name.as_str(), Arc::new(MultiRecTableProvider::new(providers)?))?;
+        }
     }
     Ok(ctx)
 }

@@ -27,11 +27,14 @@ pub use format::{RecFileFormat, RecFileFormatFactory};
 pub use sink::RecSink;
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::array::new_null_array;
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
@@ -190,6 +193,166 @@ impl TableProvider for RecTableProvider {
         let mem = MemTable::try_new(Arc::clone(&self.schema), vec![batches])?;
         mem.scan(state, projection, filters, limit).await
     }
+}
+
+/// A single SQL table backed by the *same* record set drawn from several
+/// files. Each child [`RecTableProvider`] becomes one execution partition,
+/// so DataFusion scans the files concurrently and the rows read as one
+/// `UNION ALL`.
+///
+/// The children need not agree on their column sets — records omit fields,
+/// so two files of the same `%rec:` type can produce different schemas.
+/// [`MultiRecTableProvider::new`] computes a merged schema (union of field
+/// names in first-appearance order); at scan time each partition is
+/// projected onto it, null-filling absent columns and casting columns whose
+/// type was widened during the merge (numeric ⊕ numeric → `Float64`, any
+/// other conflict → `Utf8`).
+///
+/// Filter pushdown is the *weakest* verdict across children: a predicate is
+/// `Exact` only if every child can push it, else it degrades to `Inexact` /
+/// `Unsupported` and DataFusion re-checks above the provider.
+#[derive(Debug)]
+pub struct MultiRecTableProvider {
+    children: Vec<RecTableProvider>,
+    schema: SchemaRef,
+}
+
+impl MultiRecTableProvider {
+    /// Build a partitioned table from ≥1 providers reading the same record
+    /// set across files. Errors if `children` is empty.
+    pub fn new(children: Vec<RecTableProvider>) -> Result<Self, Box<dyn std::error::Error>> {
+        if children.is_empty() {
+            return Err("MultiRecTableProvider requires at least one child".into());
+        }
+        let schema = merge_schemas(children.iter().map(|c| c.schema.as_ref()));
+        Ok(Self { children, schema })
+    }
+}
+
+#[async_trait]
+impl TableProvider for MultiRecTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DfResult<Vec<TableProviderFilterPushDown>> {
+        Ok(filters
+            .iter()
+            .map(|f| {
+                // Weakest verdict across children: a child that lacks the
+                // filtered column (or can't translate it) drags the whole
+                // table down, forcing DataFusion to re-check.
+                self.children
+                    .iter()
+                    .map(|c| match pushdown_for(f, c.schema.as_ref()) {
+                        Some((_, true)) => TableProviderFilterPushDown::Exact,
+                        Some((_, false)) => TableProviderFilterPushDown::Inexact,
+                        None => TableProviderFilterPushDown::Unsupported,
+                    })
+                    .min_by_key(pushdown_rank)
+                    .unwrap_or(TableProviderFilterPushDown::Unsupported)
+            })
+            .collect())
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DfResult<Arc<dyn ExecutionPlan>> {
+        let mut partitions: Vec<Vec<RecordBatch>> = Vec::with_capacity(self.children.len());
+        for child in &self.children {
+            let projected = child
+                .batches_for(filters)?
+                .into_iter()
+                .map(|b| project_batch(&b, &self.schema))
+                .collect::<DfResult<Vec<_>>>()?;
+            partitions.push(projected);
+        }
+        let mem = MemTable::try_new(Arc::clone(&self.schema), partitions)?;
+        mem.scan(state, projection, filters, limit).await
+    }
+}
+
+/// Rank for `min_by_key` on pushdown verdicts: lower = weaker.
+fn pushdown_rank(v: &TableProviderFilterPushDown) -> u8 {
+    match v {
+        TableProviderFilterPushDown::Unsupported => 0,
+        TableProviderFilterPushDown::Inexact => 1,
+        TableProviderFilterPushDown::Exact => 2,
+    }
+}
+
+/// Union the fields of several schemas by name, keeping first-appearance
+/// order. All merged fields are nullable (a file may lack any field). When
+/// the same name appears with differing types, widen: numeric ⊕ numeric →
+/// `Float64`, any other conflict → `Utf8`.
+fn merge_schemas<'a>(schemas: impl Iterator<Item = &'a Schema>) -> SchemaRef {
+    let mut fields: Vec<Field> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for schema in schemas {
+        for f in schema.fields() {
+            match seen.get(f.name()) {
+                None => {
+                    seen.insert(f.name().clone(), fields.len());
+                    fields.push(Field::new(f.name(), f.data_type().clone(), true));
+                }
+                Some(&idx) => {
+                    let widened = widen(fields[idx].data_type(), f.data_type());
+                    if &widened != fields[idx].data_type() {
+                        fields[idx] = Field::new(f.name(), widened, true);
+                    }
+                }
+            }
+        }
+    }
+    Arc::new(Schema::new(fields))
+}
+
+fn widen(a: &DataType, b: &DataType) -> DataType {
+    if a == b {
+        return a.clone();
+    }
+    let numeric = |t: &DataType| matches!(t, DataType::Int64 | DataType::Float64);
+    if numeric(a) && numeric(b) {
+        DataType::Float64
+    } else {
+        DataType::Utf8
+    }
+}
+
+/// Reproject `batch` onto `target`: reorder columns to match, cast columns
+/// whose type was widened, and null-fill fields the batch lacks.
+fn project_batch(batch: &RecordBatch, target: &SchemaRef) -> DfResult<RecordBatch> {
+    let src = batch.schema();
+    let mut columns = Vec::with_capacity(target.fields().len());
+    for field in target.fields() {
+        match src.index_of(field.name()) {
+            Ok(i) => {
+                let col = batch.column(i);
+                if col.data_type() == field.data_type() {
+                    columns.push(Arc::clone(col));
+                } else {
+                    columns.push(cast(col, field.data_type()).map_err(DataFusionError::from)?);
+                }
+            }
+            Err(_) => columns.push(new_null_array(field.data_type(), batch.num_rows())),
+        }
+    }
+    RecordBatch::try_new(Arc::clone(target), columns).map_err(DataFusionError::from)
 }
 
 /// Walk every rset in the file and return `(table_name, rset_index)` for

@@ -3,7 +3,7 @@
 recsql allows running SQL queries against [GNU recutils](https://www.gnu.org/software/recutils/) `.rec` files via [Apache DataFusion](https://datafusion.apache.org/). Every `%rec:` record set in the input becomes its own SQL table, named after its type. Anonymous record sets — files with no `%rec:` descriptor are exposed as the table `rec` or `rec_<index>` when there's more than one anonymous rset.
 
 ```bash
-recsql <INPUT> -q '<SQL>'
+recsql <INPUT>... -q '<SQL>'
 ```
 
 ```bash
@@ -20,6 +20,27 @@ recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
 ```
 
 `SHOW TABLES` and the rest of `information_schema` are enabled. SQL identifiers are case-folded by default, quote rec field names that use mixed case (e.g. `"Year"`).
+
+## Querying multiple files
+
+Pass several `.rec` files to query across them. Each file's record sets are registered as tables as usual; the table name decides what happens when files overlap.
+
+**Same record set, spread across files -> one table.** When two inputs resolve to the *same* table name — the same `%rec:` type, or the same explicit alias — their records are unioned into a single table, with each file becoming its own scan partition (queried in parallel). The columns need not line up: fields missing from one file are null-filled, and a field typed differently across files widens (numeric + numeric → real, otherwise text).
+
+```bash
+# 2023.rec and 2024.rec both declare `%rec: Sale` → one `Sale` table
+recsql 2023.rec 2024.rec -q 'SELECT "Region", sum("Amount") FROM sale GROUP BY "Region"'
+```
+
+**Anonymous or differently-named sets -> give them names to join.** Use `alias=path` to name a file's table (needed for anonymous csv2rec files, which would otherwise all collapse to `rec`). Distinct aliases keep the files as separate, joinable tables:
+
+```bash
+recsql sales=q1.rec returns=q2.rec -q '
+  SELECT s."id", s."total", r."reason"
+  FROM sales s LEFT JOIN returns r ON s."id" = r."sale_id"'
+```
+
+The same alias on two inputs unions them, exactly like a shared `%rec:` type (`recsql t=a.rec t=b.rec` → one partitioned `t`).
 
 ## Output format
 
