@@ -170,7 +170,7 @@ pub fn build_schema(
             let dt = match declared.get(name) {
                 Some(t) => map_rec_type(t),
                 None => {
-                    log::info!("no %type for field {name:?}; falling back to Utf8");
+                    log::debug!("no %type for field {name:?}; falling back to Utf8");
                     DataType::Utf8
                 }
             };
