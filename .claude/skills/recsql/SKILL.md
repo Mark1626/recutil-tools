@@ -13,7 +13,7 @@ description: Query GNU recutils .rec files with SQL via the recsql CLI. Use when
 recsql <INPUT.rec> -q '<SQL>'
 ```
 
-Single statement, single file. The result is printed as a pretty-formatted table.
+Single statement, single file. The result prints as a pretty-formatted table by default; pass `-f rec` to emit a `.rec` record stream instead (see "Output format" below).
 
 ## Table-naming rules
 
@@ -78,6 +78,26 @@ Untyped fields fall back to `Utf8` and a `log::info!` line is printed per column
 Predicates that translate cleanly into a recutils selection-expression are pushed down to librec and reported as `Exact` (DataFusion does not re-check). Top-level conjunctions where only some conjuncts translate are pushed as a relaxation and reported `Inexact` (DataFusion re-checks the original). Anything else is evaluated entirely in DataFusion. This means: simple `WHERE Year > 2000` filters scan less data; complex `WHERE` clauses still work, just without the librec pre-filter.
 
 Run with `RUST_LOG=debug recsql ...` to see what got pushed.
+
+## Output format
+
+By default query results render as a DataFusion pretty table. `-f/--format rec` switches the one-shot `-q` output to a GNU `.rec` record stream that round-trips straight back into `recsql`:
+
+```bash
+recsql library.rec -q 'SELECT "Title", "Year" FROM book LIMIT 1' -f rec -t Book
+# %rec: Book
+# %type: Year int
+#
+# Title: Refactoring
+# Year: 1999
+```
+
+- **`-t/--record-type NAME`** sets the `%rec:` type name (default `Record`). Unlike the `COPY` path's `record_type`, this is *not* required — a `SELECT` result has no inherent rec type, so it defaults rather than erroring. Suggest passing `-t` so the output's type name is meaningful.
+- **Same serializer as `COPY`** (`recutils_rs::arrow::record_batches_to_rec_string`): Int64 → `%type: <field> int`, Float64 → `real`, Boolean → `bool`, Utf8 → no `%type:`; non-nullable columns get `%mandatory:`; nulls are omitted from each record.
+- **Empty result** still emits a valid descriptor-only `.rec` file (no rows, no panic).
+- **REPL**: `-f`/`-t` seed the startup default, and the `.format [table|rec [TypeName]]` meta-command toggles it live. `.tables` and `.schema` always render as tables regardless of the active format. The `(N rows)` trailer only prints in table mode.
+
+This is distinct from `COPY ... TO` (below): `-f rec` writes a record stream to **stdout** for the whole query; `COPY` writes a **file** and lets you control overwrite/path semantics.
 
 ## Writing: `COPY` to a fresh `.rec` file
 

@@ -35,6 +35,9 @@ recsql library.rec -q '
 csv2rec books.csv > books.rec
 recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
 
+# Emit results as a .rec record stream instead of the default pretty table
+recsql library.rec -q 'SELECT "Title", "Year" FROM book' -f rec -t Book
+
 # Write query results to a new .rec file with %type: / %mandatory: from the schema
 recsql library.rec -q "
   COPY (SELECT \"Title\", \"Year\", \"Pages\" FROM book WHERE \"Year\" > 1990)

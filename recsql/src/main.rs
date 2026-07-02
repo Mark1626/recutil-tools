@@ -10,6 +10,15 @@ use recsql::{RecFileFormatFactory, RecTableProvider};
 #[cfg(feature = "repl")]
 mod repl;
 
+/// Output format for query results.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// Pretty box-drawing table (default).
+    Table,
+    /// GNU recutils .rec record stream.
+    Rec,
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "recsql",
@@ -25,6 +34,12 @@ struct Opts {
     /// `repl` feature; rebuild with `--features repl`).
     #[arg(short = 'q', long)]
     query: Option<String>,
+    /// Output format for query results.
+    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Table)]
+    format: OutputFormat,
+    /// `%rec:` type name to stamp on `--format rec` output.
+    #[arg(short = 't', long, default_value = "Record")]
+    record_type: String,
 }
 
 fn main() -> ExitCode {
@@ -52,8 +67,8 @@ fn main() -> ExitCode {
 async fn run(opts: Opts) -> Result<(), Box<dyn std::error::Error>> {
     let ctx = build_context(&opts.input)?;
     match opts.query {
-        Some(query) => run_query(&ctx, &query).await,
-        None => run_interactive(ctx).await,
+        Some(query) => run_query(&ctx, &query, opts.format, &opts.record_type).await,
+        None => run_interactive(ctx, opts.format, opts.record_type).await,
     }
 }
 
@@ -72,19 +87,45 @@ fn build_context(input: &Path) -> Result<SessionContext, Box<dyn std::error::Err
     Ok(ctx)
 }
 
-async fn run_query(ctx: &SessionContext, query: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_query(
+    ctx: &SessionContext,
+    query: &str,
+    format: OutputFormat,
+    record_type: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let df = ctx.sql(query).await?;
+    // Capture the arrow schema before `collect()` consumes the DataFrame; the
+    // rec serializer needs it even when the result has zero batches.
+    let schema = df.schema().as_arrow().clone();
     let batches = df.collect().await?;
-    println!("{}", pretty_format_batches(&batches)?);
+    match format {
+        OutputFormat::Table => println!("{}", pretty_format_batches(&batches)?),
+        OutputFormat::Rec => {
+            let s = recutils_rs::arrow::record_batches_to_rec_string(
+                record_type,
+                &schema,
+                &batches,
+            )?;
+            print!("{s}");
+        }
+    }
     Ok(())
 }
 
 #[cfg(feature = "repl")]
-async fn run_interactive(ctx: SessionContext) -> Result<(), Box<dyn std::error::Error>> {
-    repl::run(ctx).await
+async fn run_interactive(
+    ctx: SessionContext,
+    format: OutputFormat,
+    record_type: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    repl::run(ctx, format, record_type).await
 }
 
 #[cfg(not(feature = "repl"))]
-async fn run_interactive(_ctx: SessionContext) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_interactive(
+    _ctx: SessionContext,
+    _format: OutputFormat,
+    _record_type: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     Err("no query supplied; rebuild with `--features repl` for interactive mode".into())
 }

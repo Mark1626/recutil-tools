@@ -21,6 +21,21 @@ recsql books.rec -q 'SELECT "Title", "Year" FROM rec ORDER BY "Year"'
 
 `SHOW TABLES` and the rest of `information_schema` are enabled. SQL identifiers are case-folded by default — quote rec field names that use mixed case (e.g. `"Year"`).
 
+## Output format
+
+Query results default to a DataFusion pretty table. Pass `-f/--format rec` to emit a GNU `.rec` record stream instead, which round-trips straight back into `recsql`:
+
+```bash
+recsql library.rec -q 'SELECT "Title", "Year" FROM book LIMIT 1' -f rec -t Book
+# %rec: Book
+# %type: Year int
+#
+# Title: Refactoring
+# Year: 1999
+```
+
+`-t/--record-type NAME` sets the `%rec:` type name stamped on rec output (it can't be inferred from an arbitrary `SELECT`); it defaults to `Record`. The serializer is the same one behind `COPY ... STORED AS REC` — Int64 → `%type: <field> int`, Float64 → `real`, Boolean → `bool`, Utf8 → no `%type:`, and nulls are omitted from each record. An empty result set still emits a valid descriptor-only file.
+
 Filter pushdown to recutils' selection-expression engine is best-effort: predicates that translate fully are reported as `Exact` (librec evaluates them and DataFusion does not re-check); a partial conjunction is `Inexact` (we push a relaxation, DataFusion re-checks); anything else stays in DataFusion.
 
 ## Writing results to a new `.rec` file
@@ -64,7 +79,10 @@ Meta-commands (sqlite-style):
 | `.quit`, `.exit` | leave the REPL (or Ctrl-D)              |
 | `.tables`        | list registered tables                  |
 | `.schema [TBL]`  | show columns for `TBL`, or all          |
+| `.format [table\|rec [T]]` | show or set output format; `rec [T]` optionally sets the `%rec:` type |
 | `.read <PATH>`   | run `;`-terminated statements from file |
+
+The REPL honors `-f/--format` and `-t/--record-type` as its startup defaults, and `.format` toggles the output format live; `.tables` and `.schema` always render as tables regardless of the active format.
 
 The REPL is gated behind the `repl` cargo feature so the headless install stays lean. Without the feature, invoking `recsql` without `-q` errors out.
 
