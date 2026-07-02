@@ -27,7 +27,7 @@ default = []
 repl = ["dep:rustyline", "dep:dirs"]
 
 [dependencies]
-recutils-rs = { path = "../recutils-rs", version = "0.1", features = ["arrow"] }
+recutils-rs = { path = "../recutils-rs", version = "0.2", features = ["arrow"] }
 arrow = "58"
 datafusion = "53"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

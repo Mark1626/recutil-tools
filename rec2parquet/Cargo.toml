@@ -19,7 +19,7 @@ path = "src/main.rs"
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-recutils-rs = { path = "../recutils-rs", version = "0.1", features = ["arrow"] }
+recutils-rs = { path = "../recutils-rs", version = "0.2", features = ["arrow"] }
 arrow = "58"
 parquet = "58"
 clap = { version = "4", features = ["derive"] }
