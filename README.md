@@ -51,6 +51,12 @@ recsql library.rec -q "
 cargo build --workspace --all-targets
 ```
 
+## Other Tools
+
+### rec.k
+
+This repo also has a K recfile parser and a relational query engine in the folder [k-rec](./k-rec/README.md)
+
 ## librec discovery
 
 `recutils-rs/build.rs` searches for librec in this order:
