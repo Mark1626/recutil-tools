@@ -8,8 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Bugs
 
+- **recsql** Fix bug with multi-field type syntax
+
+### Added
+ 
+- **rec.k** K parser in ngn/k with relational operators from t.k
 - **recsql:** Allow ability to query multiple files recfiles together. Supports both same record 
   set spread across files and anonymous record sets
 - **recsql:** `-f/--format <table|rec>` flag to choose the query output format.

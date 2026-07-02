@@ -36,7 +36,7 @@ pub fn rec_to_record_batch_from_rset(
     if let Some(desc) = rset.descriptor() {
         for f in desc.fields() {
             if f.name() == "%type" {
-                if let Some((field, ty)) = split_type_decl(&f.value()) {
+                for (field, ty) in split_type_decl(&f.value()) {
                     declared_types.insert(field, ty);
                 }
             }
@@ -99,10 +99,23 @@ pub fn rec_to_filtered_batch_from_rset(
     Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
-pub fn split_type_decl(value: &str) -> Option<(String, String)> {
+/// Parse the value of a `%type:` descriptor field into `(field_name, type_spec)`
+/// pairs. GNU recutils allows typing several fields at once by separating their
+/// names with commas (`%type: A,B,C real`), so this returns one pair per named
+/// field, all sharing the same type spec. Returns an empty vec if the value has
+/// no type spec (no whitespace) or no field names.
+pub fn split_type_decl(value: &str) -> Vec<(String, String)> {
     let trimmed = value.trim();
-    let (name, rest) = trimmed.split_once(char::is_whitespace)?;
-    Some((name.trim().to_string(), rest.trim().to_string()))
+    let Some((names, rest)) = trimmed.split_once(char::is_whitespace) else {
+        return Vec::new();
+    };
+    let ty = rest.trim().to_string();
+    names
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| (n.to_string(), ty.clone()))
+        .collect()
 }
 
 pub fn collect_rows(
@@ -515,6 +528,42 @@ mod tests {
             record_batches_to_rec_string("", &schema, std::slice::from_ref(&batch))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn split_type_decl_single_field() {
+        assert_eq!(
+            split_type_decl("Year int"),
+            vec![("Year".to_string(), "int".to_string())]
+        );
+    }
+
+    #[test]
+    fn split_type_decl_multi_field_shares_type() {
+        // GNU recutils allows `%type: A,B,C real` to type several fields at once.
+        assert_eq!(
+            split_type_decl("E6ExecS,DbrExecS,ExcessS real"),
+            vec![
+                ("E6ExecS".to_string(), "real".to_string()),
+                ("DbrExecS".to_string(), "real".to_string()),
+                ("ExcessS".to_string(), "real".to_string()),
+            ]
+        );
+        // Multi-word type specs (e.g. enum) survive; recutils comma-lists carry
+        // no internal spaces, since whitespace separates the names from the type.
+        assert_eq!(
+            split_type_decl("A,B enum x y z"),
+            vec![
+                ("A".to_string(), "enum x y z".to_string()),
+                ("B".to_string(), "enum x y z".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_type_decl_no_type_spec() {
+        assert!(split_type_decl("JustAName").is_empty());
+        assert!(split_type_decl("").is_empty());
     }
 
     #[test]
