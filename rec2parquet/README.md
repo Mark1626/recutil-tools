@@ -6,7 +6,7 @@ CLI that converts [GNU recutils](https://www.gnu.org/software/recutils/) `.rec` 
 rec2parquet <INPUT> <OUTPUT> -t <TYPE> [-c <COMPRESSION>] [--max-row-group-size N] [-p] [-n]
 ```
 
-Honors `%type:` declarations from the rec descriptor; fields without a declared type fall back to `Utf8`. Repeated field names within a single record are errors today (a future `--list-repeated` mode could map them to `List<T>`).
+Honors `%type:` declarations from the rec descriptor; fields without a declared type fall back to `Utf8`
 
 ## Install
 

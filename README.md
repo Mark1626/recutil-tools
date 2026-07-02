@@ -19,7 +19,7 @@ rec2parquet <INPUT> <OUTPUT> -t <TYPE> [-c <COMPRESSION>] [--max-row-group-size 
 
 ### [`recsql`](./recsql)
 
-CLI tool to query `.rec` files with SQL via [Apache DataFusion](https://datafusion.apache.org/). Every `%rec:` record set is registered as a SQL table named after its type. Anonymous record sets — files with no `%rec:` descriptor, such as the output of `csv2rec` — are exposed as the table `rec` (or `rec_<index>` when there's more than one or the simple name would collide).
+CLI tool to query `.rec` files with SQL via [Apache DataFusion](https://datafusion.apache.org/).
 
 ```bash
 recsql <INPUT> -q '<SQL>'
